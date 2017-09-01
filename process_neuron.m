@@ -1,11 +1,39 @@
-function time = open_proces_neuron_fast_check(neuron_id, raw_neurons, target_neurons, target_stls, opts)
+function time = process_neuron(neuron_id, raw_neurons, target_neurons, opts)
 %{
 Takes in the ID for a cell (or other object in the EM volume) and creates a
 mesh representation of the object from the corresponding binary files. The
 binary files come from raw_neurons, and the mesh (in several
-representations) are saved to target_neurons. The stl files are also saved
-(a second time) to target_stls for easy import/working with blender.
+representations) are saved to target_neurons. 
 Options described below. 
+
+Parameters
+----------
+neuron_id : str/char
+raw_neurons : str/char
+    Directory where neuron chunks are stored. Expects this dir to have a 
+    folder named neuron_id in it.
+target_neurons : str/char
+    Wherever you want to save everything. If using same_dir, all outputs
+    will be dumped into the same dir. Otherwise, it will create folders 
+    for each neuron_id
+
+Options (opts struct)
+---------------------
+verbose : bool 
+downsample : float/int
+    Must be in range (0, 1]. downsample = 0.5 would give you a new mesh
+    with half as many faces
+shift : array
+    Must be 1 x 3, corresponds to (x,y,z). Use [0 0 0] if you want no 
+    shifting. This will be subtracted from every vertex 
+scale factor : float 
+    AFTER SHIFTING, scales the value of every vertex
+same_dir : bool 
+    True if you want to put all output into the same folder, False for each
+    cell's output in its own. Will make the subfolders for you.
+save_mats : bool
+    True if you want to save outputs in Matlab formats
+
 
 Notes:
 -Does not currently check the manifest file to make sure that all of the
@@ -13,35 +41,38 @@ chunks are being incorporated into the full mesh.
 -Downsampling is not ideal right now, tends to distort axons and dendrites
 especially (any relatively small structure). The full stls can usually be
 opened one at a time (at least on my computer).
+-shift is applied BEFORE scale 
 
 Input examples:
 neuron_id = '3456768'
 
-As currently written, the directories below require a \ at the end
 raw_neurons = 'C:\Users\benjaminp\Desktop\NeuronReconstructions\20170818_raw\';
 target_neurons = 'Z:\ben\20170818_fixed_bug\';
-stl_neurons = 'C:\Users\benjaminp\Desktop\NeuronReconstructions\20170818_just_dstl2\';
-
 
 %}
 
 %%% options %%%
-send_text = opts.send_text; % send a text message to specified phone #
-verbose = opts.verbose; % output data on progress for each cell
-d100 = opts.d100; % downsample 100x?
-d10 = opts.d10; % downsample 10x?
-reduce_size = opts.reduce_size; % reduce size by scale factor?
+verbose = opts.verbose; 
+downsample = opts.downsample;
 shift = opts.shift; % [40960 30720 0]
-scale_factor = 0.00001;
+scale_factor = opts.scale_factor; % 0.00001
+same_dir = opts.same_dir;
+save_mats = opts.save_mats;
 
 %%%%%%%%%%%%%%%%%%%
 
 tic 
+
 neuron_id_= strcat(neuron_id, '_0');
 
-neuron_dir_raw = strcat(raw_neurons, neuron_id);
-neuron_dir_target = target_neurons;%strcat(target_neurons, neuron_id);
-%[status msg msgID] = mkdir(neuron_dir_target);
+neuron_dir_raw = strcat(raw_neurons, '\', neuron_id);
+
+if same_dir
+    neuron_dir_target = strcat(target_neurons, '\'); 
+else
+    neuron_dir_target = strcat(target_neurons, neuron_id);
+    [status msg msgID] = mkdir(neuron_dir_target);
+end
 
 addpath(neuron_dir_raw);
 files = dir(neuron_dir_raw);
@@ -49,18 +80,17 @@ files = dir(neuron_dir_raw);
 neuron_verts = [];
 neuron_tris = [];
 
-if verbose, disp('Loading neuron binary'); end 
+if verbose, disp('Loading neuron binary...'); end 
 
 neuron_tris = cell(length(files),1);
 neuron_verts = cell(length(files),1);
-
 
 parfor i = 1:length(files)
    if files(i).isdir || strcmp(files(i).name, neuron_id_)
       continue 
    end
     
-   [tris, verts] = get_tris_and_verts2(files(i).name);
+   [tris, verts] = get_tris_and_verts(files(i).name);
 
    neuron_tris{i} = tris;
    neuron_verts{i} = verts;
@@ -80,16 +110,6 @@ end
 neuron_tris = vertcat(neuron_tris{:});
 neuron_verts = vertcat(neuron_verts{:});
 
-% Removing duplicates
-[neuron_verts, indm, indn] = unique(neuron_verts, 'rows');
-neuron_tris = indn(neuron_tris);
-
-neuron_tris_savename = strcat(neuron_dir_target, '\', neuron_id,'_tris.mat');
-neuron_verts_savename = strcat(neuron_dir_target, '\', neuron_id,'_verts.mat');
-
-%save(neuron_tris_savename, 'neuron_tris');
-%save(neuron_verts_savename, 'neuron_verts');
-
 % Checking for an empty cell so we don't make an empty mesh
 if length(neuron_tris) == 0 | length(neuron_verts) == 0
    time = toc
@@ -97,47 +117,54 @@ if length(neuron_tris) == 0 | length(neuron_verts) == 0
    return
 end
 
+% Removing duplicates
+[neuron_verts, indm, indn] = unique(neuron_verts, 'rows');
+neuron_tris = indn(neuron_tris);
+
 % Shifting and downsizing
-neuron_verts_ss = neuron_verts - shift;
-if reduce_size, neuron_verts_ss = neuron_verts_ss .* scale_factor; end
+neuron_verts = neuron_verts - shift;
+neuron_verts = neuron_verts * scale_factor;
 
-neuron_stl_savename = strcat(neuron_dir_target, '\', neuron_id, '.stl');
-stlwrite(neuron_stl_savename, neuron_tris,neuron_verts_ss);
-
-% Never use this one so hasn't been updated
-if d10
-    if verbose, disp('Downsampling 10x'); end 
-    neuron_patch_downsample_10 = reducepatch(neuron_tris, neuron_verts, .1);
-    neuron_patch_downsample_10_savename = strcat(neuron_dir_target, '\', neuron_id,'_d10.mat');
-    save(neuron_patch_downsample_10_savename, 'neuron_patch_downsample_10');
+% Save the raw Matlab variables if you want 
+if save_mats
+    neuron_tris_savename = strcat(neuron_dir_target, '\', neuron_id,'_tris.mat');
+    neuron_verts_savename = strcat(neuron_dir_target, '\', neuron_id,'_verts.mat');
+    save(neuron_tris_savename, 'neuron_tris');
+    save(neuron_verts_savename, 'neuron_verts');
 end
 
-if d100
-    if verbose, disp('Downsampling 100x'); end 
-    neuron_patch_downsample_100 = reducepatch(neuron_tris, neuron_verts, .01, 'verbose', 'fast');
-    neuron_patch_downsample_100_savename = strcat(neuron_dir_target, '\', neuron_id, '_d100.mat');
-    save(neuron_patch_downsample_100_savename, 'neuron_patch_downsample_100');
-    
-    if verbose, disp('Writing 100x Downsample .stl'); end 
+neuron_stl_savename = strcat(neuron_dir_target, '\', neuron_id, '.stl');
+stlwrite(neuron_stl_savename, neuron_tris,neuron_verts);
 
-    var = neuron_patch_downsample_100;
+if downsample ~= 1
+    if verbose, disp('Downsampling...'); end 
+    neuron_patch_downsample = reducepatch(neuron_tris, neuron_verts,...
+        downsample, 'fast');
+    
+    if save_mats
+        neuron_patch_downsample_savename = strcat(neuron_dir_target, '\',...
+            neuron_id, '_ds', num2str(1/downsample), '.mat');
+        save(neuron_patch_downsample_savename, 'neuron_patch_downsample');
+    end
+    
+    if verbose, disp('Writing downsampled .stl...'); end 
 
-    var.vertices = var.vertices - shift;
-    if reduce_size, var.vertices = var.vertices .* scale_factor; end
-    
-    neuron_stl_downsample_100_savename = strcat(neuron_dir_target, '\', neuron_id, '_stl_d100.stl');
-    neuron_stl_only_savename = strcat(target_stls, neuron_id, '_stl_d100.stl');
-    stlwrite(neuron_stl_downsample_100_savename, var);
-    stlwrite(neuron_stl_only_savename, var);
-    
-    if verbose, disp('Saving as Matlab .fig'); end
-    f = figure('visible', 'off');
-    axis equal
-    patch(neuron_patch_downsample_100);
-    set(f, 'Visible', 'on');
-    figure_d100_filename = strcat(neuron_dir_target, '\', neuron_id, '_fig_d100');
-    saveas(f, figure_d100_filename, 'fig'); 
-    delete(f);
+    neuron_stl_downsample_savename = strcat(neuron_dir_target, '\',...
+        neuron_id, '_ds', num2str(1/downsample), '.stl');
+    stlwrite(neuron_stl_downsample_savename, neuron_patch_downsample);
+   
+    % also save downsampled as a Matlab 'patch' figure
+    if save_mats
+        if verbose, disp('Saving as Matlab .fig...'), disp(''); end
+        f = figure('visible', 'off');
+        axis equal
+        patch(neuron_patch_downsample);
+        set(f, 'Visible', 'on');
+        figure_d100_filename = strcat(neuron_dir_target, '\', neuron_id,...
+            '_fig_ds', num2str(1/downsample));
+        saveas(f, figure_d100_filename, 'fig'); 
+        delete(f);
+    end
 end
 
 if verbose
@@ -145,12 +172,6 @@ if verbose
     disp(ms)
 end 
 time = toc;
-if send_text
-    t = secs2hms(time);
-    t = strcat(' ', t);
-    msg = ['Took ', t, ' to process neuron ', neuron_id];
-    send_msg({'bpedigo.notifier@gmail.com'},'Neuron Reconstruction', msg,'verizon')
-end
 end
 
 
