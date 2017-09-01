@@ -1,4 +1,4 @@
-function [tris, verts] = get_tris_and_verts2(file_name)
+function [tris, verts] = get_tris_and_verts(file_name)
     fileID = fopen(file_name);
 
     num_verts = fread(fileID,1,'uint32');
